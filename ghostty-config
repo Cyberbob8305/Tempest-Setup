@@ -1,0 +1,24 @@
+# Ghostty config. Docs: ghostty +show-config --docs | reload: cmd+shift+,
+
+# Deep navy instead of solid black. Full list: ghostty +list-themes
+theme = TokyoNight
+# Near-neutral text so Claude Code's blue highlights stand out
+foreground = #eceef2
+palette = 7=#c6cad4
+palette = 8=#6b74a0
+palette = 15=#f4f6fa
+
+window-padding-x = 14
+window-padding-y = 10
+window-padding-balance = true
+window-save-state = always
+macos-titlebar-style = transparent
+
+font-thicken = true
+adjust-cell-height = 8%
+
+# Long Claude sessions produce a lot of output
+scrollback-limit = 50000000
+mouse-hide-while-typing = true
+copy-on-select = clipboard
+confirm-close-surface = false

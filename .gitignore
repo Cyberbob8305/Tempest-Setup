@@ -1,0 +1,4 @@
+# Never commit anything containing a bot token or personal config.
+openclaw.json
+*.backup-*
+.DS_Store

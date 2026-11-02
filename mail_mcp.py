@@ -46,7 +46,20 @@ def _password():
 def _connect():
     conn = imaplib.IMAP4_SSL(HOST, 993)
     conn.login(USER, _password())
+    # Servers often list more capabilities (ENABLE, UTF8=ACCEPT) once logged in,
+    # but imaplib only remembers the list from before login, so refresh it.
+    typ, dat = conn.capability()
+    if typ == "OK" and dat and dat[-1]:
+        conn.capabilities = tuple(dat[-1].decode(errors="replace").upper().split())
     return conn
+
+
+def _select(conn, folder):
+    """Open a folder read-only. Returns an error message, or None on success."""
+    typ, data = conn.select(_q(folder), readonly=True)
+    if typ != "OK":
+        return f"Folder not found: {folder}. Use list_folders for the exact names."
+    return None
 
 
 def _q(name):
@@ -117,20 +130,48 @@ def search_messages(folder: str = "INBOX", from_addr: str = "", subject: str = "
                     limit: int = 20) -> str:
     """Search a folder, newest first. since = YYYY-MM-DD. Returns UIDs for read_message."""
     criteria = []
+    wide = []  # (key, value) pairs that aren't plain ASCII, e.g. "José" or an emoji
     for key, val in (("FROM", from_addr), ("SUBJECT", subject), ("TEXT", text)):
         if val:
-            criteria += [key, _q(val)]
+            if val.isascii():
+                criteria += [key, _q(val)]
+            else:
+                wide.append((key, val))
     if since:
         criteria += ["SINCE", time.strftime("%d-%b-%Y", time.strptime(since, "%Y-%m-%d"))]
     if unread_only:
         criteria.append("UNSEEN")
-    if not criteria:
-        criteria = ["ALL"]
     conn = _connect()
     try:
-        conn.select(_q(folder), readonly=True)
-        typ, data = conn.uid("SEARCH", None, *criteria)
-        uids = (data[0] or b"").split()[-max(1, min(limit, 100)):][::-1]
+        # imaplib sends search terms as ASCII. If the server takes UTF-8
+        # (Gmail does), switch it on and send everything in one search.
+        if wide and "UTF8=ACCEPT" in conn.capabilities and "ENABLE" in conn.capabilities:
+            conn.enable("UTF8=ACCEPT")
+            for key, val in wide:
+                criteria += [key, _q(val)]
+            wide = []
+        err = _select(conn, folder)
+        if err:
+            return err
+        if not wide:
+            typ, data = conn.uid("SEARCH", None, *(criteria or ["ALL"]))
+            if typ != "OK":
+                return f"Search failed: {data}"
+            found = (data[0] or b"").split()
+        else:
+            # Otherwise send each non-ASCII term as a UTF-8 literal. imaplib allows
+            # only one literal per command, so run one search per term and keep
+            # the messages that match all of them.
+            matched = None
+            for key, val in wide:
+                conn.literal = val.encode()
+                typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *criteria, key)
+                if typ != "OK":
+                    return f"Search failed: {data}"
+                hits = set((data[0] or b"").split())
+                matched = hits if matched is None else matched & hits
+            found = sorted(matched, key=int)
+        uids = found[-max(1, min(limit, 100)):][::-1]
         if not uids:
             return "No messages found."
         typ, data = conn.uid("FETCH", b",".join(uids),
@@ -155,7 +196,9 @@ def read_message(uid: str, folder: str = "INBOX") -> str:
     """Read one message by UID without marking it read."""
     conn = _connect()
     try:
-        conn.select(_q(folder), readonly=True)
+        err = _select(conn, folder)
+        if err:
+            return err
         typ, data = conn.uid("FETCH", uid, "(BODY.PEEK[])")
         raw = next((i[1] for i in data if isinstance(i, tuple)), None)
         if raw is None:
@@ -183,7 +226,9 @@ def create_draft(body: str, to: str = "", subject: str = "", cc: str = "",
     try:
         msg = EmailMessage()
         if reply_to_uid:
-            conn.select(_q(folder), readonly=True)
+            err = _select(conn, folder)
+            if err:
+                return err
             typ, data = conn.uid("FETCH", reply_to_uid,
                                  "(BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO SUBJECT MESSAGE-ID REFERENCES)])")
             raw = next((i[1] for i in data if isinstance(i, tuple)), None)

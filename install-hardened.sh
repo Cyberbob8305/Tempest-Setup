@@ -135,8 +135,12 @@ sleep 4
 # Two different failures look identical from Telegram (bot just doesn't reply).
 # A kickstart fixes a wedged poller but does nothing for an expired Claude
 # login, so check the log for auth trouble and name the actual fix.
+# Match auth wording, never a bare 401: that also hits millisecond timestamps
+# (12:01:26.401-06:00) and long IDs, which made healthy logs look like a
+# logged-out Claude.
 LOG="$HOME/Library/Logs/openclaw/gateway.log"
-if [ -f "$LOG" ] && tail -80 "$LOG" | grep -qiE 'unauthorized|401|auth.*(failed|expired)|not logged in'; then
+AUTH_RE='unauthorized|authentication_error|invalid api key|run /login|(status|http|code)[ =:]*401|401 unauthorized|auth[a-z]*( has)? (failed|expired)|token (has )?expired|not logged in'
+if [ -f "$LOG" ] && tail -80 "$LOG" | grep -qiE "$AUTH_RE"; then
   echo
   echo "bot-medic: the log shows an AUTH problem -- a restart won't fix that."
   echo "bot-medic: your Claude login has probably expired. Run:"
